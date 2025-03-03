@@ -3037,7 +3037,6 @@ namespace TensileLite
                                                       Hardware const& hardware) const
     {
         size_t size = 0;
-
         if(sizeMapping.streamK > 0 && sizeMapping.streamKAtomic == 0)
         {
             auto   tiles  = problem.getNumTiles(sizeMapping);
@@ -3052,8 +3051,11 @@ namespace TensileLite
                                                                  : sizeMapping.globalSplitU;
             size_t gsuMultiplier = gsu > 1 ? gsu : 0;
 
-            size += problem.d().totalLogicalElements() * sizeMapping.workspaceSizePerElemC
-                    * gsuMultiplier;
+            // size += problem.d().totalLogicalElements() * sizeMapping.workspaceSizePerElemC * gsuMultiplier;
+            size_t tiles = problem.getNumTiles(sizeMapping);
+            size_t tileSize = sizeMapping.macroTile.x * sizeMapping.macroTile.y * sizeMapping.workspaceSizePerElemC;
+            size += tiles * tileSize * gsuMultiplier;
+
             if(problemType.useGradient && problemType.useBias
                && problem.getParams().biasEnum() != rocisa::DataType::None)
             {
