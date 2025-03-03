@@ -1228,9 +1228,9 @@ class KernelWriterAssembly(KernelWriter):
         msg = "unknown"
 
       if globalParameters["PrintSolutionRejectionReason"]:
-        printWarning("%s overflowed resources.  errorCode=%d, msg=\"%s\", vgprs=%u, sgprs=%u" \
+        printWarning("%s overflowed resources.  errorCode=%d, msg=\"%s\", maxvgprs=%u, maxsgprs=%u, vgprs=%u, sgprs=%u" \
           % (self.states.kernelName, self.states.overflowedResources, msg, \
-          self.vgprPool.size(), self.sgprPool.size()))
+          self.states.regCaps["MaxVgpr"], self.states.regCaps["MaxSgpr"], self.vgprPool.size(), self.sgprPool.size()))
       module.add(SEndpgm(comment="overflowed resources"), 0)
       module.add(ValueIf(value=0), 1)
 
@@ -5733,11 +5733,14 @@ class KernelWriterAssembly(KernelWriter):
       self.defineSgpr("SrdBias", 4, 4)
       module.add(RegSet("s", "sgprSrdBias", self.sgprs["SrdBias"]))
 
-    if(kernel["GlobalSplitUAlgorithm"] == 'MultipleBufferSingleKernel'):
+    if (kernel["GlobalSplitUAlgorithm"] == 'MultipleBufferSingleKernel'):
       self.defineSgpr("SrdTD", 4, 4)
       module.add(RegSet("s", "sgprSrdTD", self.sgprs["SrdTD"]))
       self.defineSgpr("GSUSync", 1)
       module.add(RegSet("s", "sgprGSUSync", self.sgprs["GSUSync"]))
+    if (kernel["GlobalSplitUAlgorithm"] == 'MultipleBufferSingleKernel'):
+      self.defineSgpr("GSUStartWGIdx", 1)
+      module.add(RegSet("s", "sgprGSUStartWGIdx", self.sgprs["GSUStartWGIdx"]))
 
     if kernel["ProblemType"]["UseE"]:
       self.defineSgpr("SrdE", 4, 4)
@@ -5772,6 +5775,8 @@ class KernelWriterAssembly(KernelWriter):
       module.addComment1("Mapping of Acc register -> C Vgpr register")
       self.codes.accVgprRead = mapAcctoArchRegs(kernel, self.states.maxLimitAgprs, write=False)
       if kernel["StreamK"] > 0 and kernel["StreamKAtomic"] == 0:
+        self.codes.accVgprWrite = mapAcctoArchRegs(kernel, self.states.maxLimitAgprs, write=True)
+      if kernel["GlobalSplitU"] > 1 and kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel":
         self.codes.accVgprWrite = mapAcctoArchRegs(kernel, self.states.maxLimitAgprs, write=True)
       if kernel["MIArchVgpr"]:
         module.addComment1("Multiply MI out register with Alpha -> C Vgpr register")
@@ -8962,11 +8967,6 @@ class KernelWriterAssembly(KernelWriter):
 
           addrSrcSgpr = "Srd" # update src Sgpr for the second or later iterations
 
-    if ((kernel["GlobalSplitUAlgorithm"] == 'MultipleBufferSingleKernel')):
-      module.addComment("backup workspace start")
-      module.add(SMovB32(dst=sgpr("WSDstart+0"), src=sgpr("SrdD+0"), comment="record workspace start"))
-      module.add(SMovB32(dst=sgpr("WSDstart+1"), src=sgpr("SrdD+1"), comment="record workspace start"))
-
     if noMultipleBuffer:
       return module
 
@@ -9063,8 +9063,8 @@ class KernelWriterAssembly(KernelWriter):
         module.add(self.undefineSgpr("GSULog2BpeC"))
       if kernel["StreamK"] == 0:
         module.add(self.undefineSgpr("AddressC"))
-        if not (self.states.useBias == DataDirection.WRITE and kernel["GlobalSplitUAlgorithm"] == "MultipleBuffer"):
-          module.add(self.undefineSgpr("AddressD"))
+        # if not (self.states.useBias == DataDirection.WRITE and kernel["GlobalSplitUAlgorithm"] == "MultipleBuffer"):
+        #   module.add(self.undefineSgpr("AddressD"))
     return module
 
   ##############################################################################
@@ -10544,6 +10544,11 @@ class KernelWriterAssembly(KernelWriter):
       skComponent = Component.StreamK.find(self)
       module.add(skComponent.storeBranches(self, kernel, skPartialsLabel, vectorWidths_1, elements_1, tmpVgpr.idx, cvtVgprStruct))
 
+      gsuPartialsLabel = Label(label=self.labels.getNameInc("GSU_Partials"), comment="")
+      gsuComponent = Component.GSU.find(self)
+      if kernel["GlobalSplitU"] > 1 and kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel":
+        module.add(gsuComponent.storeBranches(self, kernel, tPB, gsuPartialsLabel, vectorWidths_1, elements_1, tmpVgpr, cvtVgprStruct, vectorDataTypes, factorDims))
+
       betaModules = Module("Betas")
       currentInstLength = 0
       for idx0 in reversed(range(len(betas))):
@@ -10651,6 +10656,7 @@ class KernelWriterAssembly(KernelWriter):
         self.sgprPool.checkIn(activationSetPCStruct.sgprOffsetBack)
 
       module.add(skComponent.writePartials(self, kernel, skPartialsLabel, vectorWidths_1, elements_1, tmpVgpr.idx, cvtVgprStruct, endLabel))
+      # module.add(gsuComponent.writePartials(self, kernel, gsuPartialsLabel, vectorWidths_1, elements_1, tmpVgpr.idx, cvtVgprStruct, endLabel))
 
       # End label
       module.add(endLabel)
@@ -11288,9 +11294,11 @@ class KernelWriterAssembly(KernelWriter):
         isGlc = kernel["NonTemporalD"] & 0x1
         isSlc = kernel["NonTemporalD"] & 0x2
         isNT  = kernel["NonTemporalD"] & 0x4
-        if kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel":
+        # Only GSU>1 MBSK write to workspace (GSU1 MBSK will write to output buffer)
+        if kernel["GlobalSplitU"] > 1 and kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel":
           isGlc = True
           isSlc = True
+          wsOffset = sgpr(tmpS01)
 
         bps = self.states.bpeCexternal * ss.cfg.gwvw
         rpv = self.states.bpeCexternal * ss.cfg.gwvw / self.states.bpr
@@ -11302,7 +11310,14 @@ class KernelWriterAssembly(KernelWriter):
           addr0 = vgpr(addrCalc.addrDVgpr,2)
           addr1 = ""
         if ss.optSrdIncForRow and addrCalc.rowInc:
-          module.add(addrCalc.incrementToNextRow(kernel, "D", ss, tmpS01))
+          if kernel["GlobalSplitU"] > 1 and kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel":
+            storeWidth = kernel["StoreVectorWidth"]
+            numWaves = kernel["MIWaveGroup"][0] * kernel["MIWaveGroup"][1]
+            increment = (kernel["WavefrontSize"] * numWaves) * storeWidth * self.states.bpeCinternal
+            module.add(SAddU32(dst=sgpr(tmpS01), src0=sgpr(tmpS01), src1=increment, comment="Increase sgpr offset"))
+          else:
+            module.add(addrCalc.incrementToNextRow(kernel, "D", ss, tmpS01))
+            
         dataType     = kernel["ProblemType"]["DestDataType"]
         globalOffset = addrCalc.globalOffset
       elif tc == 'TD':
