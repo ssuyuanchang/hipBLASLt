@@ -35,6 +35,7 @@ import abc
 from copy import deepcopy
 from ..Common import DataDirection
 from math import ceil
+from ..KernelWriterModules import mapAcctoArchRegs
 
 class GSU(Component):
     """
@@ -338,7 +339,7 @@ class GSU(Component):
                 elementSgprs = tmpSgpr + ss.cfg.numTempSgprPerBatch
 
                 codeAccVgprRead = deepcopy(writer.codes.accVgprRead) if writer.states.serializedStore else None
-                codeAccVgprWrite = deepcopy(writer.codes.accVgprWrite) if writer.states.serializedStore else None
+                codeAccVgprWrite = mapAcctoArchRegs(kernel, writer.states.maxLimitAgprs, write=True) if writer.states.serializedStore else None
                 mulAlpha = writer.codes.mulAlphaMultipleBuffer if (kernel["_GlobalAccumulation"] == 'MultipleBuffer' or kernel["_GlobalAccumulation"] == 'MultipleBufferSingleKernel') else writer.codes.mulAlphaOther
                 codeMulAlpha = deepcopy(mulAlpha) if writer.states.serializedStore else None
 
@@ -369,6 +370,9 @@ class GSU(Component):
                     biasLocalBarrierInit = True
 
                 # synchronize GSUWG in reductionBatch. If is the last WG -> do reduction; else branch to GW_END
+                if kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
+                    module.addselfAsm("// Reduction start\n") #GSUSYNC
+
                 ss.firstBatch = True
                 for batchIdx in range(0, numBatches):
                     elementStartIdx = batchIdx * numElementsPerBatch
@@ -382,6 +386,9 @@ class GSU(Component):
                             gwvw, elementsThisBatch, writer.vgprs.addrD, writer.vgprs.addrC, \
                             tmpVgpr, tmpVgprDynamic, cvtVgprStruct, \
                             elementSgprs, tmpSgpr, codeAccVgprRead, codeAccVgprWrite, endLabel))
+
+                if kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
+                    module.addselfAsm("// Reduction end\n") #GSUSYNC
 
                 ss.resetState()
 
@@ -504,7 +511,7 @@ class GSU(Component):
     
         ########################################
         # AccVgpr read
-        module.add(SWaitCnt(lgkmcnt=0, kmcnt=0, comment="Wait previous batch write over"))
+        module.add(SWaitCnt(vmcnt=0, comment="Wait previous batch write over"))
         if codeAccVgprRead is not None and kernel["LocalSplitU"] == 1:
             regsPerScalar = writer.states.bpeCinternal // writer.states.bpr # register per scalar
             # loop over store instructions within one batch
@@ -920,9 +927,6 @@ class GSU(Component):
         
         if writer.states.serializedStore:
             module.add(SNop(0, "1 wait state required when next inst writes vgprs held by previous dwordx4 store inst"))
-
-        if kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
-            module.addselfAsm("//Reduction end\n") #GSUSYNC
 
         return module
     
