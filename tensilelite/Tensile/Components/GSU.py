@@ -977,8 +977,11 @@ class GSU(Component):
         module.add(SAndB32(dst=sgpr(tmpSgpr+1), src0=sgpr("GSU"), src1=hex(0x3FFF), comment="Restore GSU"))
         module.add(SAddU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("WorkGroup1"), comment="NumWorkGroups1*wg0+wg1"))
         module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr(tmpSgpr+1), comment="(NumWorkGroups1*wg0+wg1)*GSU"))
-        module.add(SMovB32(dst=sgpr("GSUStartWGIdx"), src=sgpr(tmpSgpr), comment="starting WG index of each GSU WGs"))
-        module.add(SAddU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("GSUSumIdx"), comment="(NumWorkGroups0*wg1+wg0)*GSU+GSUSumIdx"))
+        module.add(SMulI32(dst=sgpr("GSUStartWGIdx"), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"), comment="BatchNumWG"))
+        module.add(SMulI32(dst=sgpr("GSUStartWGIdx"), src0=sgpr("GSUStartWGIdx"), src1=sgpr("WorkGroup2"), comment="BatchNumWG"))
+        module.add(SMulI32(dst=sgpr("GSUStartWGIdx"), src0=sgpr("GSUStartWGIdx"), src1=sgpr(tmpSgpr+1), comment="BatchNumWG"))
+        module.add(SAddU32(dst=sgpr("GSUStartWGIdx"), src0=sgpr("GSUStartWGIdx"), src1=sgpr(tmpSgpr), comment="starting WG index of each GSU WGs"))
+        module.add(SAddU32(dst=sgpr(tmpSgpr), src0=sgpr("GSUStartWGIdx"), src1=sgpr("GSUSumIdx"), comment="(NumWorkGroups0*wg1+wg0)*GSU+BatchNumWG+GSUSumIdx"))
         
         assert kernel["BufferStore"]
         module.addSpaceLine()
