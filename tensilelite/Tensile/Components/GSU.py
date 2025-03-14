@@ -26,7 +26,7 @@ from ..TensileInstructions import Module, Label, RegisterPoolResource, SAddU32, 
     Instruction, SCSelectB32, SAndB32, scalarStaticDivideAndRemainder, sMagicDivAlg2, SMinU32, SCmpLeU32, VMovB32, \
     SAddI32, SLShiftLeftB32, SLoadB32, SWaitCnt, SMEMModifiers, SBarrier, SStoreB32, SLongBranchPositive, \
     ceilDivide, replaceHolder, SNop, staticMultiply, SSleep, VAddF32, VAddF64, VReadfirstlaneB32, SBranchIfNotZero,\
-    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy
+    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy, RegSet
 from ..Common import print2
 from ..Component import Component
 from ..AsmStoreState import StoreState, VectorDataTypes
@@ -881,6 +881,10 @@ class GSU(Component):
         # AccVgpr write
         if codeAccVgprWrite is not None:
             regsPerScalar = writer.states.bpeCinternal // writer.states.bpr # register per scalar
+            if kernel["MIArchVgpr"] and kernel["LocalSplitU"] > 1:
+                tmpStartVgprValuC = writer.states.c.startVgprValu
+                writer.states.c.startVgprValu = 0
+                module.add(RegSet("v", "vgprValuC", 0))
             # loop over store instructions within one batch
             for elementIdx in range(0, len(batchElements)):
                 # loop over scalars within one store instruction
@@ -891,6 +895,9 @@ class GSU(Component):
 
             if not kernel["MIArchVgpr"]:
                 module.add(SNop(1, "2 wait states required before reading vgpr"))
+            elif kernel["LocalSplitU"] > 1:
+                writer.states.c.startVgprValu = tmpStartVgprValuC
+                module.add(RegSet("v", "vgprValuC", tmpStartVgprValuC))
 
         if edge and (not kernel["BufferStore"]): # atomic or
             # subsequent batch must start with full exec mask

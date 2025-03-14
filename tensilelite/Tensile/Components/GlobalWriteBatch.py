@@ -27,7 +27,7 @@ from ..Activation import ActivationModule, ActivationType
 from ..AsmStoreState import StoreState
 from ..TensileInstructions import Label, Module, EXEC, SDWAModifiers, VCC, SelectBit, \
                             vgpr, sgpr, replaceHolder, SaturateCastType, VCvtBF16toFP32, \
-                            DataType, CvtType, RoundType, staticMultiply
+                            DataType, CvtType, RoundType, staticMultiply, RegSet
 from ..TensileInstructions.Instructions import *
 from ..AsmAddressCalculation import AddrCalculation
 from ..Components.PackData import formatting, PackData_F16, PackData_BF16
@@ -867,6 +867,10 @@ class GlobalWriteBatchWriter:
     # AccVgpr read
     if self.codeAccVgprRead is not None and (self.kernel["LocalSplitU"] == 1 or self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel"):
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
+      if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
+        tmpStartVgprValuC = self.parentWriter.states.c.startVgprValu
+        self.parentWriter.states.c.startVgprValu = 0
+        module.add(RegSet("v", "vgprValuC", 0))
       # loop over store instructions within one batch
       for elementIdx in range(len(self.batchElements)):
         # loop over scalars within one store instruction
@@ -874,6 +878,11 @@ class GlobalWriteBatchWriter:
           # loop over registers within one scalar
           for rIdx in range(0, regsPerScalar):
             module.add(replaceHolder(self.codeAccVgprRead.items().pop(0), self.ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - self.parentWriter.states.c.startVgprValu))
+      
+      if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
+        self.parentWriter.states.c.startVgprValu = tmpStartVgprValuC
+        module.add(RegSet("v", "vgprValuC", tmpStartVgprValuC))
+
     elif self.kernel["LocalSplitU"] > 1:
       # read from LSU VGPRs
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
