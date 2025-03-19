@@ -3047,15 +3047,12 @@ namespace TensileLite
         else
         {
             // TODO: Pass GSU from problem and change value[2] to gsu if gsu != default value
-            size_t gsu           = problem.getParams().gsu() > 0 ? problem.getParams().gsu()
-                                                                 : sizeMapping.globalSplitU;
+            size_t gsu = problem.getParams().gsu() > 0 ? problem.getParams().gsu() : sizeMapping.globalSplitU;
             size_t gsuMultiplier = gsu > 1 ? gsu : 0;
-
-            // size += problem.d().totalLogicalElements() * sizeMapping.workspaceSizePerElemC * gsuMultiplier;
             size_t tiles = problem.getNumTiles(sizeMapping);
             size_t tileSize = sizeMapping.macroTile.x * sizeMapping.macroTile.y * sizeMapping.workspaceSizePerElemC;
-            size_t tmp = gsu > 1? tiles * tileSize : 0;
-            size += tmp;
+            size_t bufSize = gsu > 1 ? tiles * tileSize : 0;
+            size += bufSize;
 
             if(problemType.useGradient && problemType.useBias
                && problem.getParams().biasEnum() != rocisa::DataType::None)
