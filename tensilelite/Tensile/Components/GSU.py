@@ -28,7 +28,7 @@ from ..TensileInstructions import Module, Label, SAddU32, SAddCU32, SCmpEQU32, S
     Instruction, SCSelectB32, SAndB32, scalarStaticDivideAndRemainder, sMagicDivAlg2, SMinU32, SCmpLeU32, VMovB32, \
     SAddI32, SLShiftLeftB32, SLoadB32, SWaitCnt, SBarrier, SStoreB32, SLongBranchPositive, \
     ceilDivide, replaceHolder, SNop, staticMultiply, SSleep, VAddF32, VAddF64, VReadfirstlaneB32, SBranchIfNotZero,\
-    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy
+    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy, RegSet
 from ..Common import print2
 from ..AsmStoreState import StoreState, VectorDataTypes
 from ..AsmAddressCalculation import AddrCalculation
@@ -522,7 +522,7 @@ class GSU(Component):
                 for vi in range(0, gwvw):
                     # loop over registers within one scalar
                     for rIdx in range(0, regsPerScalar):
-                        module.add(replaceHolder(codeAccVgprRead.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
+                        module.add(replaceHolder(codeAccVgprRead.popFirstItem(), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
         elif kernel["LocalSplitU"] > 1:
             # read from LSU VGPRs
             regsPerScalar = writer.states.bpeCinternal // writer.states.bpr # register per scalar
@@ -872,16 +872,23 @@ class GSU(Component):
         module.addselfAsm("// accvgpr write\n")
         if codeAccVgprWrite is not None:
             regsPerScalar = writer.states.bpeCinternal // writer.states.bpr # register per scalar
+            if kernel["MIArchVgpr"] and kernel["LocalSplitU"] > 1:
+                tmpStartVgprValuC = writer.states.c.startVgprValu
+                writer.states.c.startVgprValu = 0
+                module.add(RegSet("v", "vgprValuC", 0))
             # loop over store instructions within one batch
             for elementIdx in range(0, len(batchElements)):
                 # loop over scalars within one store instruction
                 for vi in range(0, gwvw):
                     # loop over registers within one scalar
                     for rIdx in range(0, regsPerScalar):
-                        module.add(replaceHolder(codeAccVgprWrite.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
+                        module.add(replaceHolder(codeAccVgprWrite.popFirstItem(), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
 
             if not kernel["MIArchVgpr"]:
                 module.add(SNop(1, "2 wait states required before reading vgpr"))
+            elif kernel["LocalSplitU"] > 1:
+                writer.states.c.startVgprValu = tmpStartVgprValuC
+                module.add(RegSet("v", "vgprValuC", tmpStartVgprValuC))
 
         if edge and (not kernel["BufferStore"]): # atomic or
             # subsequent batch must start with full exec mask
@@ -1285,7 +1292,7 @@ class GSU(Component):
                 for vi in range(0, gwvw):
                     # loop over registers within one scalar
                     for rIdx in range(0, regsPerScalar):
-                        module.add(replaceHolder(codeAccVgprRead.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx))
+                        module.add(replaceHolder(codeAccVgprRead.popFirstItem(), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx))
                         # module.add(replaceHolder(self.codeAccVgprRead.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
                         # if kernel["StoreCInUnroll"] and not edge:
                         #     tempStr = tempStr.replace("__placeholder__",str(elementIdx*gwvw*regsPerScalar + regsPerScalar*vi + rIdx))

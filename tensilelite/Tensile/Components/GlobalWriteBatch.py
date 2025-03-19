@@ -22,6 +22,7 @@
 
 from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers
 from rocisa.enum import CvtType, RoundType
+from rocisa.code import RegSet
 from ..Common import DataDirection, SemanticVersion
 from ..Component import GlobalWriteComponents
 from ..SolutionStructs import Solution
@@ -1098,13 +1099,26 @@ class GlobalWriteBatchWriter:
     # AccVgpr read
     if self.codeAccVgprRead is not None and (self.kernel["LocalSplitU"] == 1 or self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel"):
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
+      if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
+        tmpStartVgprValuC = self.parentWriter.states.c.startVgprValu
+        self.parentWriter.states.c.startVgprValu = 0
+        module.add(RegSet("v", "vgprValuC", 0))
       # loop over store instructions within one batch
       for elementIdx in range(len(self.batchElements)):
         # loop over scalars within one store instruction
         for vi in range(self.gwvw):
           # loop over registers within one scalar
           for rIdx in range(0, regsPerScalar):
+<<<<<<< HEAD
             module.add(replaceHolder(self.codeAccVgprRead.popFirstItem(), self.ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - self.parentWriter.states.c.startVgprValu))
+=======
+            module.add(replaceHolder(self.codeAccVgprRead.items().pop(0), self.ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - self.parentWriter.states.c.startVgprValu))
+      
+      if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
+        self.parentWriter.states.c.startVgprValu = tmpStartVgprValuC
+        module.add(RegSet("v", "vgprValuC", tmpStartVgprValuC))
+        
+>>>>>>> fix MIArchVgpr=True with LSU > 1 (#5)
     elif self.kernel["LocalSplitU"] > 1:
       # read from LSU VGPRs
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
