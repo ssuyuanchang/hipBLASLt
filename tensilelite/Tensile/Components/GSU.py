@@ -21,15 +21,17 @@
 ################################################################################
 
 from rocisa import countInstruction
-from rocisa.container import ContinuousRegister, SMEMModifiers
-from ..TensileInstructions import Module, Label, SAddU32, SAddCU32, SCmpEQU32, SCBranchSCC1, \
-    scalarUInt32DivideAndRemainder, SMovB32, SMulI32, SBranch, SMovB64, SLShiftRightB32, sgpr, vgpr, log2, \
+from rocisa.container import sgpr, vgpr, ContinuousRegister, SMEMModifiers
+from rocisa.code import Module, Label, RegSet
+from ..TensileInstructions import SAddU32, SAddCU32, SCmpEQU32, SCBranchSCC1, \
+    scalarUInt32DivideAndRemainder, SMovB32, SMulI32, SBranch, SMovB64, SLShiftRightB32, log2, \
     SCmpLtU32, SCmpLgU32, SCmpEQI32, SCmpLeI32, VCmpGEI32, SCMovB32, SSubI32, SSubU32, SLShiftLeftB64, SCBranchSCC0, \
     Instruction, SCSelectB32, SAndB32, scalarStaticDivideAndRemainder, sMagicDivAlg2, SMinU32, SCmpLeU32, VMovB32, \
     SAddI32, SLShiftLeftB32, SLoadB32, SWaitCnt, SBarrier, SStoreB32, SLongBranchPositive, \
     ceilDivide, replaceHolder, SNop, staticMultiply, SSleep, VAddF32, VAddF64, VReadfirstlaneB32, SBranchIfNotZero,\
-    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy, RegSet
+    SMulHIU32, VAddPKF32, VCndMaskB32, SAtomicDec, SCmpGtI32, SEndpgm, fastdeepcopy
 from ..Common import print2
+from ..Component import Component
 from ..AsmStoreState import StoreState, VectorDataTypes
 from ..AsmAddressCalculation import AddrCalculation
 import abc
@@ -37,8 +39,6 @@ from copy import deepcopy
 from ..Common import DataDirection
 from math import ceil
 from ..KernelWriterModules import mapAcctoArchRegs
-
-from copy import deepcopy
 
 class GSU(Component):
     """
@@ -525,7 +525,7 @@ class GSU(Component):
                 for vi in range(0, gwvw):
                     # loop over registers within one scalar
                     for rIdx in range(0, regsPerScalar):
-                        module.add(replaceHolder(codeAccVgprRead.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
+                        module.add(replaceHolder(codeAccVgprRead.popFirstItem(), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
         elif kernel["LocalSplitU"] > 1:
             # read from LSU VGPRs
             regsPerScalar = writer.states.bpeCinternal // writer.states.bpr # register per scalar
@@ -534,7 +534,7 @@ class GSU(Component):
                     for vi in range(0, gwvw):
                         for rIdx in range(0, regsPerScalar):
                             idx = ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu
-                            module.add(VMovB32(vgpr("ValuC+%u"%(idx)), vgpr("ValuC+%u"%(idx + ss.lsuStartVgprOffset)), "load from "+str(idx + ss.lsuStartVgprOffset)+" to "+str(idx) ))
+                            module.add(VMovB32(vgpr("ValuC+%u"%(idx)), vgpr("ValuC+%u"%(idx + ss.lsuStartVgprOffset)), comment="load from "+str(idx + ss.lsuStartVgprOffset)+" to "+str(idx) ))
             ss.lsuStartVgprOffset += len(batchElements) * gwvw * regsPerScalar
 
             if not kernel["MIArchVgpr"]:
@@ -634,8 +634,6 @@ class GSU(Component):
         # ss.setupStoreElementsForBatch(kernel, gwvw, batchElements, batchElementSgprs, isOptNLL=False, factorDim=0, isWorkspace=True)
         ss.setupStoreElementsForBatchWihoutVgprCheckOut(kernel, gwvw, batchElements, batchElementSgprs, isOptNLL=True, factorDim=0, isWorkspace=True)
 
-        loadsIssued = 0
-        storesIssued = 0
         tmpS01 = tmpSgpr # scratch sgprs
         tmpS02 = tmpSgpr + 1
 
@@ -657,63 +655,11 @@ class GSU(Component):
         if edge and writer.db["AssertNoEdge"]:
             module.add(writer.getBomb()) # should not get here
  
-        loadInputCode    = Module("loadInputCode")
-        self.betaLoadIssued = []
-        self.eLoadIssued = []
-        self.biasLoadIssued = []
-        self.scaleAVecLoadIssued = []
-        self.scaleBVecLoadIssued = []
-        self.scaleAlphaVecLoadIssued = []
-        loadedDataBeta = {}
-        loadedDataE = {}
-        loadedDataBias = {}
-        loadedDataScaleAVec = {}
-        loadedDataScaleBVec = {}
-        loadedDataScaleAlphaVec = {}
-
         if kernel["BufferStore"] and edge:
             bufferOOB = tmpVgpr.idx + tmpVgpr.size - 1
             module.add(VMovB32(dst=vgpr(bufferOOB), src="BufferOOB"))
         else:
             bufferOOB = None
-
-        # Internal state for GlobalWriteBatch
-        # 0 for None, 1 for WorkGroupReduction = False, 2 for WorkGroupReduction = True
-        # storeBiasD = 0
-        # if writer.states.useBias == DataDirection.WRITE and (not kernel["WorkGroupReduction"]) and kernel["ProblemType"]["BiasSrc"] == "D":
-        #     storeBiasD = 1
-
-        # # TODO: added to MBSK?
-        # for elementIdx in range(0, len(batchElements)):
-        #     addrCalc: AddrCalculation = ss.elementAddr[elementIdx]
-        #     addrCVgpr    = addrCalc.addrCVgpr
-        #     addrDVgpr    = addrCalc.addrDVgpr
-        #     # addrEVgpr    = addrCalc.addrEVgpr
-        #     # addrBiasVgpr = addrCalc.addrBiasVgpr
-        #     # addrScaleAVecVgpr = addrCalc.addrScaleAVecVgpr
-        #     # addrScaleBVecVgpr = addrCalc.addrScaleBVecVgpr
-        #     # addrScaleAlphaVecVgpr = addrCalc.addrScaleAlphaVecVgpr
-        #     # data     = ss.elementData[elementIdx]
-        #     # dataBeta = ss.elementData[elementIdx]
-        #     # dataE    = ss.elementDataE[elementIdx]
-        #     # dataBias = ss.elementDataBias[elementIdx]
-        #     # dataScaleAVec = ss.elementDataScaleAVec[elementIdx]
-        #     # dataScaleBVec = ss.elementDataScaleBVec[elementIdx]
-        #     # dataScaleAlphaVec = ss.elementDataScaleAlphaVec[elementIdx]
-        #     # mask     = ss.elementMask[elementIdx]
-        #     # vc0 = element[3]
-        #     # sumIdxGSUSYNC = ss.elementSumIdx[elementIdx]
-    
-        #     # module.add(addrCalc.emitAddressSetupCode(kernel, tPB, ss, tmpVgpr, tmpS01, edge, beta, atomic, elementIdx, addrDVgpr))
-
-        #     #  TODO: need to check this for loop
-        #     isSingleKernel = (kernel["GlobalSplitU"] == 1 or kernel["GlobalSplitUAlgorithm"] == "MultipleBufferSingleKernel") or kernel["StreamK"] > 0
-
-        #     # if storeBiasD == 1:
-        #     #     module.add(addrCalc.emitLdChange(kernel, ss, 'Bias', edge, beta, mask, bufferOOB, (elementIdx == len(batchElements) - 1), tmpVgpr, tmpSgpr, addrBiasVgpr, addrBias, 0))
-        #     # module.add(addrCalc.emitLdChange(kernel, ss, 'D', edge, beta, mask, bufferOOB, (elementIdx == len(batchElements) - 1), tmpVgpr, tmpSgpr, addrDVgpr, addrD, 0))
-        #     # if kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
-        #     #     module.add(addrCalc.emitLdChange(kernel, ss, 'TD', edge, beta, mask, bufferOOB, (elementIdx == len(batchElements) - 1), tmpVgpr, tmpSgpr, addrCalc.addrGSUSyncVgprs, addrD, 0))
 
         if beta and kernel["StoreSyncOpt"]:
             module.add(SSleep(kernel["StoreSyncOpt"] - 1, "optimization: sync and wait"))
@@ -754,7 +700,7 @@ class GSU(Component):
                 for vi in range(0, gwvw):
                     # loop over registers within one scalar
                     for rIdx in range(0, regsPerScalar):
-                        module.add(replaceHolder(codeAccVgprWrite.items().pop(0), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
+                        module.add(replaceHolder(codeAccVgprWrite.popFirstItem(), ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - writer.states.c.startVgprValu))
 
             if not kernel["MIArchVgpr"]:
                 module.add(SNop(1, "2 wait states required before reading vgpr"))

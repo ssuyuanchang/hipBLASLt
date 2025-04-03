@@ -20,16 +20,15 @@
 # CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ################################################################################
 
-from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers
+from rocisa.container import vgpr, sgpr, SMEMModifiers, VOP3PModifiers, MUBUFModifiers, SDWAModifiers, EXEC, VCC
 from rocisa.enum import CvtType, RoundType
-from rocisa.code import RegSet
+from rocisa.code import Label, Module, RegSet
 from ..Common import DataDirection, SemanticVersion
 from ..Component import GlobalWriteComponents
 from ..SolutionStructs import Solution
 from ..Activation import ActivationModule, ActivationType
 from ..AsmStoreState import StoreState
-from ..TensileInstructions import Label, Module, EXEC, SDWAModifiers, VCC, SelectBit, \
-                            vgpr, sgpr, replaceHolder, SaturateCastType, VCvtBF16toFP32, \
+from ..TensileInstructions import SelectBit, replaceHolder, SaturateCastType, VCvtBF16toFP32, \
                             DataType, staticMultiply
 from ..TensileInstructions.Instructions import *
 from ..AsmAddressCalculation import AddrCalculation
@@ -1109,16 +1108,12 @@ class GlobalWriteBatchWriter:
         for vi in range(self.gwvw):
           # loop over registers within one scalar
           for rIdx in range(0, regsPerScalar):
-<<<<<<< HEAD
             module.add(replaceHolder(self.codeAccVgprRead.popFirstItem(), self.ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - self.parentWriter.states.c.startVgprValu))
-=======
-            module.add(replaceHolder(self.codeAccVgprRead.items().pop(0), self.ss.elementSumIdx[elementIdx]*regsPerScalar + regsPerScalar*vi + rIdx - self.parentWriter.states.c.startVgprValu))
       
       if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
         self.parentWriter.states.c.startVgprValu = tmpStartVgprValuC
         module.add(RegSet("v", "vgprValuC", tmpStartVgprValuC))
         
->>>>>>> fix MIArchVgpr=True with LSU > 1 (#5)
     elif self.kernel["LocalSplitU"] > 1:
       # read from LSU VGPRs
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
@@ -1135,20 +1130,6 @@ class GlobalWriteBatchWriter:
 
     if self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
       module.addComment1("store after Acc, "+"GSU: "+str(self.kernel["GlobalSplitU"]))
-      # module.addComment("calculate the starting WG index of GSU WGs")
-      # module.add(SMulI32(dst=sgpr(self.tmpS01), src0=sgpr("NumWorkGroups1"), src1=sgpr("WorkGroup0"), comment="NumWorkGroups1*wg0"))
-      # module.add(SAndB32(dst=sgpr(self.tmpS01+1), src0=sgpr("GSU"), src1=hex(0x3FFF), comment="Restore GSU"))
-      # module.add(SAddU32(dst=sgpr(self.tmpS01), src0=sgpr(self.tmpS01), src1=sgpr("WorkGroup1"), comment="NumWorkGroups1*wg0+wg1"))
-      # module.add(SMulI32(dst=sgpr(self.tmpS01), src0=sgpr(self.tmpS01), src1=sgpr(self.tmpS01+1), comment="(NumWorkGroups1*wg0+wg1)*GSU"))
-      # module.add(SMovB32(dst=sgpr("GSUStartWGIdx"), src=sgpr(self.tmpS01), comment="starting WG index of each GSU WGs"))
-      # module.add(SAddU32(dst=sgpr(self.tmpS01), src0=sgpr(self.tmpS01), src1=sgpr("GSUSumIdx"), comment="(NumWorkGroups0*wg1+wg0)*GSU+GSUSumIdx"))
-      # # adding offset to workspace buffer
-      # reductionOffset = self.kernel["MacroTile0"]*self.kernel["MacroTile1"]*self.parentWriter.states.bpeCinternal
-      # module.add(SMulHIU32(dst=sgpr(self.tmpS01+1), src0=sgpr(self.tmpS01), src1=hex(reductionOffset), comment="(MT0*MT1*bpeC)*WGIdx"))
-      # module.add(SMulI32(dst=sgpr(self.tmpS01), src0=sgpr(self.tmpS01), src1=hex(reductionOffset), comment="(MT0*MT1*bpeC)*WGIdx"))
-      # module.add(SAddU32(dst=sgpr("SrdD+0"), src0=sgpr("AddressD+0"), src1=sgpr(self.tmpS01), comment="add lo to SRD"))
-      # module.add(SAddCU32(dst=sgpr("SrdD+1"), src0=sgpr("AddressD+1"), src1=sgpr(self.tmpS01+1), comment="add hi to SRD"))
-      # module.addSpaceLine()
 
     storeCodeGSUSK = Module("GroupLoadStore")
     if self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":#GSUGSU
